@@ -1,11 +1,14 @@
+
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 # -------------------------
@@ -26,6 +29,34 @@ ALADHAN_API = "https://api.aladhan.com/v1/timingsByCity"
 
 
 # -------------------------
+# HTTP session with retries
+# -------------------------
+
+def create_aladhan_session():
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        status=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+        respect_retry_after_header=True,
+    )
+
+    adapter = HTTPAdapter(max_retries=retry)
+
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+    return session
+
+
+aladhan_session = create_aladhan_session()
+
+
+# -------------------------
 # Location state
 # -------------------------
 
@@ -34,7 +65,6 @@ def load_state():
         with LOCATION_FILE.open("r", encoding="utf-8") as file:
             return json.load(file)
 
-    # Fallback if location.json does not exist yet.
     return {
         "city": os.getenv("CITY", "Uppala"),
         "state": os.getenv("STATE", "Kerala"),
@@ -59,6 +89,7 @@ def telegram_request(method, payload=None):
         json=payload or {},
         timeout=30,
     )
+
     response.raise_for_status()
 
     result = response.json()
@@ -109,20 +140,26 @@ def fetch_prayer_data(location, target_date):
         "school": ASR_SCHOOL,
     }
 
-    response = requests.get(
+    print(
+        f"Fetching prayer timings for "
+        f"{location['city']}, {location['state']}, "
+        f"{location['country']} on {date_string}"
+    )
+
+    response = aladhan_session.get(
         f"{ALADHAN_API}/{date_string}",
         params=params,
         timeout=30,
     )
+
     response.raise_for_status()
 
     result = response.json()
 
     if result.get("code") != 200 or not result.get("data"):
         raise ValueError(
-            f"Could not find prayer timings for "
-            f"{location['city']}, {location['state']}, "
-            f"{location['country']}."
+            f"AlAdhan API returned an invalid response: "
+            f"{result.get('status', {}).get('message', 'Unknown error')}"
         )
 
     data = result["data"]
@@ -134,19 +171,25 @@ def fetch_prayer_data(location, target_date):
 
 
 def validate_location(location):
-    """Check whether AlAdhan returns timings for the requested location."""
-    tomorrow = datetime.now(TIMEZONE).date() + timedelta(days=1)
+    today = datetime.now(TIMEZONE).date()
     fetch_prayer_data(location, today)
 
 
 def format_time(value):
-    """Remove timezone annotations and keep the HH:MM time."""
     match = re.search(r"\b\d{2}:\d{2}\b", str(value))
 
     if not match:
         raise ValueError(f"Unexpected prayer time format: {value}")
 
     return match.group(0)
+
+
+def format_12_hour(value):
+    time_24 = format_time(value)
+
+    return datetime.strptime(
+        time_24, "%H:%M"
+    ).strftime("%I:%M %p").lstrip("0")
 
 
 def format_prayer_message(location, target_date, data):
@@ -157,14 +200,9 @@ def format_prayer_message(location, target_date, data):
     )
 
     gregorian_date = target_date.strftime("%d %B %Y")
-
     city = location["city"]
 
     timings = data["timings"]
-
-    def format_12_hour(value):
-        time_24 = format_time(value)
-        return datetime.strptime(time_24, "%H:%M").strftime("%I:%M %p").lstrip("0")
 
     lines = [
         f"🕌 *Daily Namaz Timings ({city})*",
@@ -190,24 +228,25 @@ def process_commands(state):
     updates = get_pending_updates(state.get("last_update_id"))
 
     if not updates:
-        return state, False, []
+        return state, []
 
-    location_changed = False
     notifications = []
 
-    # Process updates in chronological order.
     for update in updates:
         update_id = update["update_id"]
 
-        # Advance the offset past every update, including unrelated messages.
         current_id = state.get("last_update_id")
+
         if current_id is None or update_id > current_id:
             state["last_update_id"] = update_id
 
         message = update.get("message", {})
-        sender_chat_id = str(message.get("chat", {}).get("id", ""))
 
-        # Only allow commands from the configured chat.
+        sender_chat_id = str(
+            message.get("chat", {}).get("id", "")
+        )
+
+        # Only accept commands from the configured chat.
         if sender_chat_id != CHAT_ID:
             continue
 
@@ -224,19 +263,25 @@ def process_commands(state):
 
         if len(command_parts) < 2:
             notifications.append(
-                "Usage:\n/setcity City, State, Country\n\n"
-                "Example:\n/setcity Kochi, Kerala, India"
+                "Usage:\n"
+                "/setcity City, State, Country\n\n"
+                "Example:\n"
+                "/setcity Kochi, Kerala, India"
             )
             continue
 
-        # Expected format: /setcity City, State, Country
-        parts = [part.strip() for part in command_parts[1].split(",")]
+        parts = [
+            part.strip()
+            for part in command_parts[1].split(",")
+        ]
 
         if len(parts) != 3 or not all(parts):
             notifications.append(
                 "❌ Invalid location format.\n\n"
-                "Use:\n/setcity City, State, Country\n\n"
-                "Example:\n/setcity Uppala, Kerala, India"
+                "Use:\n"
+                "/setcity City, State, Country\n\n"
+                "Example:\n"
+                "/setcity Uppala, Kerala, India"
             )
             continue
 
@@ -248,32 +293,30 @@ def process_commands(state):
 
         try:
             validate_location(new_location)
+
         except (requests.RequestException, ValueError) as error:
+            print(f"Location validation failed: {error}")
+
             notifications.append(
-                f"❌ Could not validate this location:\n"
+                "❌ Could not validate this location:\n"
                 f"{parts[0]}, {parts[1]}, {parts[2]}\n\n"
                 "Please check the spelling and try again."
             )
-            print(f"Location validation failed: {error}")
             continue
 
-        # Each valid command replaces the previous one.
-        # Therefore, the latest valid command wins.
+        # Latest valid command wins.
         state.update(new_location)
-        location_changed = True
 
-    # Persist both the selected location and Telegram update offset.
-    # The workflow commits this file back to the repository.
-    save_state(state)
-
-    if location_changed:
         notifications.append(
             "✅ Prayer location updated!\n\n"
-            f"📍 {state['city']}, {state['state']}, {state['country']}\n\n"
-            "Your next daily Namaz timings will use this location."
+            f"📍 {state['city']}, {state['state']}, "
+            f"{state['country']}\n\n"
+            "Your daily Namaz timings will use this location."
         )
 
-    return state, location_changed, notifications
+    save_state(state)
+
+    return state, notifications
 
 
 # -------------------------
@@ -283,26 +326,35 @@ def process_commands(state):
 def main():
     state = load_state()
 
-    # 1. Process pending /setcity commands.
-    state, _, notifications = process_commands(state)
+    # 1. Process pending Telegram commands.
+    state, notifications = process_commands(state)
 
-    # 2. Notify the user about command results.
+    # 2. Send command responses.
     for notification in notifications:
         send_message(notification)
 
-    # 3. Calculate tomorrow's date in India.
-    tomorrow = datetime.now(TIMEZONE).date() + timedelta(days=1)
+    # 3. Get TODAY'S date in Indian time.
+    today = datetime.now(TIMEZONE).date()
 
-    # 4. Fetch timings for the selected location.
-    data = fetch_prayer_data(state, tomorrow)
+    print(f"Today's date in IST: {today}")
 
-    # 5. Send tomorrow's Namaz timings.
-    message = format_prayer_message(state, tomorrow, data)
+    # 4. Fetch TODAY'S prayer timings.
+    data = fetch_prayer_data(state, today)
+
+    # 5. Format the message.
+    message = format_prayer_message(
+        state,
+        today,
+        data,
+    )
+
+    # 6. Send timings.
     send_message(message)
 
     print(
-        f"Sent Namaz timings for {tomorrow} "
-        f"in {state['city']}, {state['state']}, {state['country']}."
+        f"Successfully sent Namaz timings for {today} "
+        f"in {state['city']}, {state['state']}, "
+        f"{state['country']}."
     )
 
 
