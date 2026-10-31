@@ -16,7 +16,11 @@ from urllib3.util.retry import Retry
 # =====================================================
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-CHAT_ID = str(os.environ["TELEGRAM_CHAT_ID"])
+CHAT_IDS = [
+    chat_id.strip()
+    for chat_id in os.environ["TELEGRAM_CHAT_IDS"].split(",")
+    if chat_id.strip()
+]
 
 TIMEZONE = ZoneInfo("Asia/Kolkata")
 
@@ -125,14 +129,15 @@ def telegram_request(method, payload=None):
 
 
 def send_message(message):
-    telegram_request(
-        "sendMessage",
-        {
-            "chat_id": CHAT_ID,
-            "text": message,
-            "parse_mode": "Markdown",
-        },
-    )
+   for chat_id in CHAT_IDS:
+        telegram_request(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+            },
+        )
 
 
 def get_pending_updates(last_update_id):
