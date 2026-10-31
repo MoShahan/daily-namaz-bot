@@ -1,0 +1,38 @@
+name: Daily Namaz Timings
+
+on:
+  schedule:
+    # 18:30 UTC = 00:00 Indian Standard Time
+    - cron: "30 18 * * *"
+
+  # Allows you to test the bot manually from GitHub.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send-prayer-times:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send prayer timings
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CITY: ${{ vars.CITY }}
+          COUNTRY: ${{ vars.COUNTRY }}
+          CALCULATION_METHOD: ${{ vars.CALCULATION_METHOD }}
+          ASR_SCHOOL: ${{ vars.ASR_SCHOOL }}
+        run: python bot.py
