@@ -1,7 +1,9 @@
+
 name: Daily Namaz Timings
 
 on:
   schedule:
+    # 12:01 AM IST = 18:31 UTC (previous day)
     - cron: "31 18 * * *"
 
   workflow_dispatch:
@@ -29,7 +31,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CALCULATION_METHOD: ${{ vars.CALCULATION_METHOD }}
+          CALCULATION_METHOD: "1"
           ASR_SCHOOL: "0"
         run: python bot.py
 
