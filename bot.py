@@ -129,45 +129,72 @@ def get_pending_updates(last_update_id):
 # Prayer timings
 # -------------------------
 
+
 def fetch_prayer_data(location, target_date):
     date_string = target_date.strftime("%d-%m-%Y")
 
-    params = {
-        "city": location["city"],
-        "state": location["state"],
-        "country": location["country"],
-        "method": CALCULATION_METHOD,
-        "school": ASR_SCHOOL,
-    }
+    # Use precise coordinates for Uppala.
+    if location["city"].lower() == "uppala":
+        latitude = 12.684361
+        longitude = 74.900682
 
-    print(
-        f"Fetching prayer timings for "
-        f"{location['city']}, {location['state']}, "
-        f"{location['country']} on {date_string}"
-    )
+        url = f"https://api.aladhan.com/v1/timings/{date_string}"
 
-    response = aladhan_session.get(
-        f"{ALADHAN_API}/{date_string}",
-        params=params,
-        timeout=30,
-    )
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "method": CALCULATION_METHOD,
+            "school": ASR_SCHOOL,
+            "timezonestring": "Asia/Kolkata",
+        }
+    else:
+        url = f"{ALADHAN_API}/{date_string}"
 
-    response.raise_for_status()
+        params = {
+            "city": location["city"],
+            "state": location["state"],
+            "country": location["country"],
+            "method": CALCULATION_METHOD,
+            "school": ASR_SCHOOL,
+        }
 
-    result = response.json()
+    print(f"Fetching timings for {date_string}: {location['city']}")
 
-    if result.get("code") != 200 or not result.get("data"):
-        raise ValueError(
-            f"AlAdhan API returned an invalid response: "
-            f"{result.get('status', {}).get('message', 'Unknown error')}"
-        )
+    # Try the API with manual retries.
+    for attempt in range(1, 6):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                timeout=30,
+            )
 
-    data = result["data"]
+            response.raise_for_status()
 
-    if not data.get("timings"):
-        raise ValueError("The API did not return prayer timings.")
+            result = response.json()
 
-    return data
+            if result.get("code") != 200 or not result.get("data"):
+                raise ValueError("Invalid AlAdhan API response")
+
+            data = result["data"]
+
+            if not data.get("timings"):
+                raise ValueError("Prayer timings missing from response")
+
+            print(f"Successfully fetched timings on attempt {attempt}")
+            return data
+
+        except (requests.RequestException, ValueError) as error:
+            print(f"Attempt {attempt}/5 failed: {error}")
+
+            if attempt == 5:
+                raise RuntimeError(
+                    "Unable to retrieve prayer timings after 5 attempts. "
+                    "AlAdhan may be temporarily unavailable."
+                ) from error
+
+            import time
+            time.sleep(attempt * 10)
 
 
 def validate_location(location):
