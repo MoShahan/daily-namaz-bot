@@ -136,7 +136,7 @@ def fetch_prayer_data(location, target_date):
 def validate_location(location):
     """Check whether AlAdhan returns timings for the requested location."""
     tomorrow = datetime.now(TIMEZONE).date() + timedelta(days=1)
-    fetch_prayer_data(location, tomorrow)
+    fetch_prayer_data(location, today)
 
 
 def format_time(value):
