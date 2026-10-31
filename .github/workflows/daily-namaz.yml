@@ -30,7 +30,7 @@ jobs:
       - name: Process commands and send Namaz timings
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
           CALCULATION_METHOD: "1"
           ASR_SCHOOL: "0"
         run: python bot.py
