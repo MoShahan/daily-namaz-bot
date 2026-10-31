@@ -398,7 +398,7 @@ def process_commands(state):
         )
 
         # Only accept commands from the configured chat.
-        if sender_chat_id != CHAT_ID:
+        if sender_chat_id != CHAT_IDS[0]:
             continue
 
         message_text = message.get(
